@@ -145,6 +145,56 @@ class ServiceManager:
         with open(self.config_file, "w") as f:
             json.dump(config, f, indent=2)
 
+    def reload_config(self) -> bool:
+        """
+        Reload configuration from file.
+
+        This preserves the active service and running processes,
+        but updates service definitions from the config file.
+
+        Returns:
+            True if reload was successful
+        """
+        try:
+            config_path = Path(self.config_file)
+            if not config_path.exists():
+                print(f"Config file not found: {self.config_file}")
+                return False
+
+            with open(config_path, "r") as f:
+                config = json.load(f)
+
+            # Store current active service
+            current_active = self.active_service
+
+            # Store current service states (PIDs, statuses)
+            old_services = self.services.copy()
+
+            # Update services from config
+            self.services = {}
+            self.http_port = config.get("http_port", 9999)
+
+            for svc_config in config.get("services", []):
+                service = ComfyUIService(**svc_config)
+                # Restore state if service existed before
+                if service.name in old_services:
+                    old_service = old_services[service.name]
+                    service.pid = old_service.pid
+                    service.status = old_service.status
+                    service.process = old_service.process
+                self.services[service.name] = service
+
+            # Restore active service
+            self.active_service = current_active
+
+            print(f"Configuration reloaded from {self.config_file}")
+            print(f"Services: {list(self.services.keys())}")
+            return True
+
+        except Exception as e:
+            print(f"Error reloading config: {e}")
+            return False
+
     def get_service(self, name: str) -> Optional[ComfyUIService]:
         """Get service by name"""
         return self.services.get(name)
@@ -404,6 +454,16 @@ def create_http_api(manager: ServiceManager):
         return jsonify({
             "services": list(manager.services.keys()),
             "active": manager.active_service
+        })
+
+    @app.route('/reload', methods=['POST'])
+    def reload_config():
+        """Reload configuration from file"""
+        result = manager.reload_config()
+        return jsonify({
+            "success": result,
+            "services": list(manager.services.keys()),
+            "message": "Configuration reloaded" if result else "Failed to reload configuration"
         })
 
     @app.route('/switch/<service_name>', methods=['POST', 'GET'])
