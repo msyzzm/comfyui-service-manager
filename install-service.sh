@@ -63,10 +63,15 @@ if [ ! -d "${INSTALL_DIR}" ]; then
     fi
 fi
 
-# Copy files to installation directory
-print_info "Copying files to ${INSTALL_DIR}..."
-cp -r . "${INSTALL_DIR}/"
-chown -R aznable:aznable "${INSTALL_DIR}"
+# Copy files to installation directory (only if not already there)
+CURRENT_DIR=$(pwd)
+if [ "${CURRENT_DIR}" = "${INSTALL_DIR}" ]; then
+    print_info "Already in installation directory, skipping copy..."
+else
+    print_info "Copying files to ${INSTALL_DIR}..."
+    cp -r . "${INSTALL_DIR}/"
+    chown -R aznable:aznable "${INSTALL_DIR}"
+fi
 
 # Make scripts executable
 chmod +x "${INSTALL_DIR}/comfyui_service_manager.py"
