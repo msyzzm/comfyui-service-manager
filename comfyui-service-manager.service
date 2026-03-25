@@ -9,8 +9,12 @@ Type=simple
 User=aznable
 Group=aznable
 WorkingDirectory=/home/aznable/comfyui-service-manager
+
+# Environment
 Environment="PATH=/home/aznable/miniconda3/envs/comfy/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONUNBUFFERED=1"
+
+# Execution
 ExecStart=/home/aznable/miniconda3/envs/comfy/bin/python comfyui_service_manager.py server --port 9999
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
@@ -19,10 +23,17 @@ TimeoutStopSec=30
 Restart=always
 RestartSec=5
 
+# Security
+# NoNewPrivileges=true  # Commented out - may interfere with port binding
+# PrivateTmp=true       # Commented out - causes file access issues
+
 # Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=comfyui-service-manager
+
+# Resource limits
+# LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
