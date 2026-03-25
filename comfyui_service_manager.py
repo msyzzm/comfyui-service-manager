@@ -289,12 +289,13 @@ class ServiceManager:
 
         try:
             # Start process
+            # Don't capture stdout/stderr so logs go to systemd journal
             process = subprocess.Popen(
                 cmd,
                 cwd=service.work_dir,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,  # Inherit parent stdout (goes to journal)
+                stderr=None,  # Inherit parent stderr (goes to journal)
                 preexec_fn=os.setsid if hasattr(os, 'setsid') else None
             )
 
