@@ -14,7 +14,7 @@ Manage multiple ComfyUI instances with different configurations. Switch between 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/comfyui-service-manager.git
+git clone https://github.com/msyzzm/comfyui-service-manager.git
 cd comfyui-service-manager
 
 # Install dependencies
@@ -67,6 +67,27 @@ cp config/services.json.template config/services.json
 ```
 
 ### 2. Start HTTP API Server
+
+#### Option A: Run as Systemd Service (Recommended for Linux)
+
+```bash
+# Install as systemd service
+sudo ./install-service.sh
+
+# Start the service
+sudo systemctl start comfyui-service-manager
+
+# Enable auto-start on boot
+sudo systemctl enable comfyui-service-manager
+
+# Check status
+sudo systemctl status comfyui-service-manager
+
+# View logs
+sudo journalctl -u comfyui-service-manager -f
+```
+
+#### Option B: Run Manually
 
 ```bash
 python comfyui_service_manager.py server --port 9999

@@ -1,0 +1,32 @@
+[Unit]
+Description=ComfyUI Service Manager
+Documentation=https://github.com/msyzzm/comfyui-service-manager
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aznable
+Group=aznable
+WorkingDirectory=/home/aznable/comfyui-service-manager
+Environment="PATH=/home/aznable/miniconda3/envs/comfy/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/home/aznable/miniconda3/envs/comfy/bin/python comfyui_service_manager.py server --port 9999
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=comfyui-service-manager
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
