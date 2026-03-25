@@ -76,6 +76,23 @@ fi
 # Make scripts executable
 chmod +x "${INSTALL_DIR}/comfyui_service_manager.py"
 
+# Generate services.json from template if it doesn't exist
+CONFIG_FILE="${INSTALL_DIR}/config/services.json"
+TEMPLATE_FILE="${INSTALL_DIR}/config/services.json.template"
+
+if [ ! -f "${CONFIG_FILE}" ]; then
+    if [ -f "${TEMPLATE_FILE}" ]; then
+        print_info "Generating services.json from template..."
+        cp "${TEMPLATE_FILE}" "${CONFIG_FILE}"
+        chown aznable:aznable "${CONFIG_FILE}"
+        print_warn "Please edit ${CONFIG_FILE} with your settings before starting the service"
+    else
+        print_warn "Template file not found, will use default configuration"
+    fi
+else
+    print_info "services.json already exists, skipping generation"
+fi
+
 # Install service file
 print_info "Installing systemd service file..."
 cp "${SERVICE_FILE}" "/etc/systemd/system/"
