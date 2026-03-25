@@ -75,10 +75,12 @@ class ServiceManager:
         self.active_service: Optional[str] = None
         self.http_port = 9999
         self.pid_dir = "pids"  # Directory to store PID files
+        self.logs_dir = "logs"  # Directory to store service logs
         self.load_config()
 
-        # Create PID directory
+        # Create directories
         Path(self.pid_dir).mkdir(exist_ok=True)
+        Path(self.logs_dir).mkdir(exist_ok=True)
 
     def _get_default_config_path(self) -> str:
         """Get default config file path"""
@@ -287,15 +289,21 @@ class ServiceManager:
         env = os.environ.copy()
         env.update(service.env_vars)
 
+        # Prepare log file
+        log_file = os.path.join(self.logs_dir, f"{name}.log")
+        print(f"Service '{name}' log: {log_file}")
+
         try:
-            # Start process
-            # Don't capture stdout/stderr so logs go to systemd journal
+            # Open log file for writing
+            log_handle = open(log_file, "a")
+
+            # Start process with output redirected to log file
             process = subprocess.Popen(
                 cmd,
                 cwd=service.work_dir,
                 env=env,
-                stdout=None,  # Inherit parent stdout (goes to journal)
-                stderr=None,  # Inherit parent stderr (goes to journal)
+                stdout=log_handle,
+                stderr=log_handle,
                 preexec_fn=os.setsid if hasattr(os, 'setsid') else None
             )
 
@@ -432,6 +440,31 @@ class ServiceManager:
             "timestamp": datetime.now().isoformat()
         }
 
+    def get_service_logs(self, service_name: str, tail: int = 100) -> Optional[str]:
+        """
+        Get logs for a specific service.
+
+        Args:
+            service_name: Name of the service
+            tail: Number of lines to get from the end of the log file
+
+        Returns:
+            Log content as string, or None if log file not found
+        """
+        log_file = os.path.join(self.logs_dir, f"{service_name}.log")
+        if not os.path.exists(log_file):
+            return None
+
+        try:
+            with open(log_file, "r") as f:
+                # Read last N lines
+                lines = f.readlines()
+                if tail:
+                    lines = lines[-tail:]
+                return "".join(lines)
+        except Exception as e:
+            return f"Error reading log: {e}"
+
 
 # =============================================================================
 # HTTP API Server
@@ -495,6 +528,20 @@ def create_http_api(manager: ServiceManager):
             "message": f"Stopped {service_name}" if result else f"Failed to stop {service_name}"
         })
 
+    @app.route('/logs/<service_name>', methods=['GET'])
+    def get_logs(service_name):
+        """Get logs for a specific service"""
+        tail = request.args.get('tail', default=100, type=int)
+        log_content = manager.get_service_logs(service_name, tail=tail)
+        if log_content is None:
+            return jsonify({
+                "error": f"Service '{service_name}' not found or log file not found"
+            }), 404
+        return jsonify({
+            "service": service_name,
+            "logs": log_content
+        })
+
     return app
 
 
@@ -509,13 +556,13 @@ def main():
     )
     parser.add_argument(
         'command',
-        choices=['start', 'stop', 'switch', 'status', 'server'],
+        choices=['start', 'stop', 'switch', 'status', 'logs', 'server'],
         help="Command to execute"
     )
     parser.add_argument(
         'service',
         nargs='?',
-        help="Service name (for start/stop/switch commands)"
+        help="Service name (for start/stop/switch/logs commands)"
     )
     parser.add_argument(
         '--config',
@@ -527,6 +574,17 @@ def main():
         type=int,
         default=9999,
         help="HTTP API port (default: 9999)"
+    )
+    parser.add_argument(
+        '--tail',
+        type=int,
+        default=100,
+        help="Number of log lines to show (default: 100)"
+    )
+    parser.add_argument(
+        '--follow',
+        action='store_true',
+        help="Follow log output (like tail -f)"
     )
 
     args = parser.parse_args()
@@ -561,6 +619,40 @@ def main():
             parser.error("switch command requires a service name")
         success = manager.switch_service(args.service)
         sys.exit(0 if success else 1)
+
+    elif args.command == 'logs':
+        if not args.service:
+            parser.error("logs command requires a service name")
+        log_file = os.path.join(manager.logs_dir, f"{args.service}.log")
+        if not os.path.exists(log_file):
+            print(f"Log file not found: {log_file}")
+            sys.exit(1)
+
+        if args.follow:
+            # Follow mode (like tail -f)
+            import time
+            print(f"Following logs for '{args.service}' (Ctrl+C to stop)...")
+            print(f"Log file: {log_file}")
+            print("-" * 50)
+            with open(log_file, "r") as f:
+                # Go to end of file
+                f.seek(0, 2)
+                while True:
+                    line = f.readline()
+                    if line:
+                        print(line, end="")
+                    else:
+                        time.sleep(0.1)
+        else:
+            # Show tail lines
+            logs = manager.get_service_logs(args.service, tail=args.tail)
+            if logs:
+                print(f"Logs for '{args.service}' (last {args.tail} lines):")
+                print(f"Log file: {log_file}")
+                print("-" * 50)
+                print(logs)
+            else:
+                print(f"Log file is empty: {log_file}")
 
     elif args.command == 'server':
         # Start HTTP API server
