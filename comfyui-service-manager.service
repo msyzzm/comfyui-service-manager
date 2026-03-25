@@ -24,9 +24,5 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=comfyui-service-manager
 
-# Security
-NoNewPrivileges=true
-PrivateTmp=true
-
 [Install]
 WantedBy=multi-user.target
