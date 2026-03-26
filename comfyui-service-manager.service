@@ -6,8 +6,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=aznable
-Group=aznable
+# Run as root to manage ComfyUI processes as root
+User=root
+Group=root
 WorkingDirectory=/home/aznable/comfyui-service-manager
 
 # Environment
