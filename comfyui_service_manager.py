@@ -107,6 +107,33 @@ class ServiceManager:
         # Restore service state from PID files
         self._restore_service_state()
 
+    def auto_start_first_service(self) -> bool:
+        """
+        Automatically start the first service if no service is running.
+
+        Returns:
+            True if a service was started, False otherwise
+        """
+        # Check if there's already an active service
+        if self.active_service:
+            print(f"[Auto-start] Service '{self.active_service}' is already running")
+            return False
+
+        # Get the first service from configuration
+        if not self.services:
+            print("[Auto-start] No services configured")
+            return False
+
+        first_service_name = list(self.services.keys())[0]
+        print(f"[Auto-start] Starting first service: '{first_service_name}'")
+
+        success = self.start_service(first_service_name)
+        if success:
+            print(f"[Auto-start] Successfully started '{first_service_name}'")
+        else:
+            print(f"[Auto-start] Failed to start '{first_service_name}'")
+        return success
+
     def create_default_config(self):
         """Create default service configuration"""
         self.services = {
@@ -660,6 +687,9 @@ def main():
             print("Error: Flask is required for HTTP API server")
             print("Install with: pip install flask")
             sys.exit(1)
+
+        # Auto-start first service if none is running
+        manager.auto_start_first_service()
 
         app = create_http_api(manager)
         print(f"Starting ComfyUI Service Manager HTTP API on port {manager.http_port}...")
