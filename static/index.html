@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ComfyUI Service Manager</title>
+<style>
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #12121a;
+    --bg-card: #16161f;
+    --bg-card-hover: #1c1c28;
+    --bg-input: #1a1a26;
+    --border: #2a2a3a;
+    --border-active: #4f46e5;
+    --text-primary: #e4e4ef;
+    --text-secondary: #8888a0;
+    --text-muted: #55556a;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --accent-dim: rgba(99, 102, 241, 0.12);
+    --green: #22c55e;
+    --green-dim: rgba(34, 197, 94, 0.12);
+    --yellow: #eab308;
+    --yellow-dim: rgba(234, 179, 8, 0.12);
+    --red: #ef4444;
+    --red-dim: rgba(239, 68, 68, 0.12);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59, 130, 246, 0.12);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, var(--accent), #a855f7);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    color: white;
+    flex-shrink: 0;
+  }
+
+  .header-title h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+
+  .header-title span {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .connection-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    transition: background 0.3s;
+  }
+
+  .connection-dot.connected { background: var(--green); }
+
+  .connection-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .btn-icon {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    font-size: 16px;
+  }
+
+  .btn-icon:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  /* Main layout */
+  .main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .btn:hover { background: var(--bg-card-hover); border-color: var(--text-muted); }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+
+  .btn-accent {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+  .btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 5px;
+  }
+
+  .btn-green { border-color: var(--green); color: var(--green); }
+  .btn-green:hover { background: var(--green-dim); }
+
+  .btn-red { border-color: var(--red); color: var(--red); }
+  .btn-red:hover { background: var(--red-dim); }
+
+  .btn-blue { border-color: var(--blue); color: var(--blue); }
+  .btn-blue:hover { background: var(--blue-dim); }
+
+  /* Service cards grid */
+  .services-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .service-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .service-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+
+  .service-card.active::before { background: var(--green); }
+  .service-card.starting::before { background: var(--yellow); animation: pulse-bar 1.5s infinite; }
+  .service-card.error::before { background: var(--red); }
+
+  @keyframes pulse-bar {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .service-card:hover { border-color: var(--text-muted); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .card-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .service-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .status-running { background: var(--green-dim); color: var(--green); }
+  .status-running .status-dot { background: var(--green); }
+
+  .status-stopped { background: rgba(100,100,120,0.15); color: var(--text-secondary); }
+  .status-stopped .status-dot { background: var(--text-secondary); }
+
+  .status-starting { background: var(--yellow-dim); color: var(--yellow); }
+  .status-starting .status-dot { background: var(--yellow); animation: blink 1s infinite; }
+
+  .status-stopping { background: var(--yellow-dim); color: var(--yellow); }
+  .status-stopping .status-dot { background: var(--yellow); }
+
+  .status-error { background: var(--red-dim); color: var(--red); }
+  .status-error .status-dot { background: var(--red); }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .card-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+    margin-bottom: 16px;
+  }
+
+  .meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .meta-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .meta-value {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .card-actions .btn { flex: 1; justify-content: center; }
+
+  /* Log panel */
+  .log-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+  }
+
+  .log-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .log-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .log-tabs {
+    display: flex;
+    gap: 4px;
+  }
+
+  .log-tab {
+    padding: 4px 12px;
+    border-radius: 5px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    transition: all 0.15s;
+  }
+
+  .log-tab:hover { background: var(--bg-card-hover); }
+  .log-tab.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .log-body {
+    height: 340px;
+    overflow-y: auto;
+    padding: 14px 18px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+  }
+
+  .log-body::-webkit-scrollbar { width: 6px; }
+  .log-body::-webkit-scrollbar-track { background: transparent; }
+  .log-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-line { white-space: pre-wrap; word-break: break-all; }
+
+  .log-line-error { color: var(--red); }
+  .log-line-warn { color: var(--yellow); }
+  .log-line-info { color: var(--blue); }
+
+  .log-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .log-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* Toast */
+  .toast-container {
+    position: fixed;
+    top: 80px;
+    right: 24px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .toast {
+    padding: 12px 18px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: var(--shadow);
+    animation: toast-in 0.25s ease-out;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 380px;
+    border: 1px solid;
+  }
+
+  .toast-success { background: var(--green-dim); color: var(--green); border-color: rgba(34,197,94,0.3); }
+  .toast-error { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.3); }
+  .toast-info { background: var(--blue-dim); color: var(--blue); border-color: rgba(59,130,246,0.3); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(40px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .toast-out {
+    animation: toast-out 0.2s ease-in forwards;
+  }
+
+  @keyframes toast-out {
+    to { opacity: 0; transform: translateX(40px); }
+  }
+
+  /* Loading spinner */
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .main { padding: 16px; }
+    .services-grid { grid-template-columns: 1fr; }
+    .header { padding: 12px 16px; }
+    .card-meta { grid-template-columns: 1fr; }
+    .log-body { height: 260px; }
+  }
+
+  /* Settings modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fade-in 0.15s;
+  }
+
+  @keyframes fade-in { from { opacity: 0; } }
+
+  .modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 400px;
+    max-width: 90vw;
+    padding: 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  .modal h3 {
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+
+  .form-group {
+    margin-bottom: 14px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .form-group input {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .form-group input:focus { border-color: var(--accent); }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo">C</div>
+    <div class="header-title">
+      <h1>ComfyUI Service Manager</h1>
+      <span id="headerSubtitle">Connecting...</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="connection-dot" id="connDot"></div>
+    <span class="connection-label" id="connLabel">Disconnected</span>
+    <button class="btn-icon" onclick="openSettings()" title="Settings">⚙</button>
+    <button class="btn-icon" onclick="refreshAll()" title="Refresh">↻</button>
+  </div>
+</div>
+
+<!-- Main content -->
+<div class="main">
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <button class="btn btn-accent" onclick="reloadConfig()">↻ Reload Config</button>
+      <span style="font-size:12px;color:var(--text-muted)" id="lastUpdate">—</span>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted)" id="autoRefreshHint">
+      Auto-refresh: 3s
+    </div>
+  </div>
+
+  <!-- Service cards -->
+  <div class="services-grid" id="servicesGrid">
+    <!-- Cards rendered by JS -->
+  </div>
+
+  <!-- Log panel -->
+  <div class="log-panel">
+    <div class="log-header">
+      <div class="log-header-left">
+        <h3>📋 Logs</h3>
+        <div class="log-tabs" id="logTabs">
+          <!-- Tabs rendered by JS -->
+        </div>
+      </div>
+      <div class="log-controls">
+        <button class="btn btn-sm" id="btnAutoScroll" onclick="toggleAutoScroll()" style="color:var(--accent)">↓ Auto-scroll</button>
+        <button class="btn btn-sm" onclick="clearLogView()">Clear</button>
+        <button class="btn btn-sm" onclick="fetchLogs()">↻</button>
+      </div>
+    </div>
+    <div class="log-body" id="logBody">
+      <div class="log-empty">Select a service to view logs</div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  // ============================================================
+  // State
+  // ============================================================
+  const API = '';  // Same-origin, empty = relative
+  let state = { services: {}, active_service: null };
+  let currentLogService = null;
+  let autoScroll = true;
+  let refreshTimer = null;
+  let logTimer = null;
+  let isConnected = false;
+  let baseUrl = '';
+
+  // ============================================================
+  // API helpers
+  // ============================================================
+  async function api(path, method = 'GET') {
+    const res = await fetch(baseUrl + path, { method });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function apiPost(path) {
+    const res = await fetch(baseUrl + path, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // ============================================================
+  // Toast notifications
+  // ============================================================
+  function toast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    const icons = { success: '✓', error: '✗', info: 'ℹ' };
+    el.innerHTML = `<span>${icons[type] || 'ℹ'}</span><span>${message}</span>`;
+    container.appendChild(el);
+    setTimeout(() => {
+      el.classList.add('toast-out');
+      setTimeout(() => el.remove(), 200);
+    }, 3500);
+  }
+
+  // ============================================================
+  // Connection status
+  // ============================================================
+  function setConnected(v) {
+    isConnected = v;
+    document.getElementById('connDot').className = 'connection-dot' + (v ? ' connected' : '');
+    document.getElementById('connLabel').textContent = v ? 'Connected' : 'Disconnected';
+  }
+
+  // ============================================================
+  // Fetch status
+  // ============================================================
+  async function fetchStatus() {
+    try {
+      const data = await api('/status');
+      state = data;
+      setConnected(true);
+      document.getElementById('headerSubtitle').textContent =
+        data.active_service ? `Active: ${data.active_service}` : 'No active service';
+      renderServices();
+      updateLogTabs();
+      document.getElementById('lastUpdate').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    } catch {
+      setConnected(false);
+      document.getElementById('headerSubtitle').textContent = 'Connection failed';
+    }
+  }
+
+  // ============================================================
+  // Render service cards
+  // ============================================================
+  function renderServices() {
+    const grid = document.getElementById('servicesGrid');
+    const names = Object.keys(state.services);
+    if (!names.length) {
+      grid.innerHTML = '<div style="color:var(--text-muted);padding:20px">No services configured</div>';
+      return;
+    }
+
+    grid.innerHTML = names.map(name => {
+      const s = state.services[name];
+      const isActive = s.is_active;
+      const cardClass = isActive ? 'active' : s.status;
+      const isRunning = s.status === 'running';
+      const isStarting = s.status === 'starting';
+      const isStopping = s.status === 'stopping';
+
+      return `
+        <div class="service-card ${cardClass}">
+          <div class="card-header">
+            <div class="card-header-left">
+              <span class="service-name">${esc(name)}</span>
+              ${isActive ? '<span style="color:var(--green);font-size:12px;font-weight:600">● ACTIVE</span>' : ''}
+            </div>
+            <div class="status-badge status-${s.status}">
+              <span class="status-dot"></span>
+              ${s.status}
+            </div>
+          </div>
+          <div class="card-meta">
+            <div class="meta-item">
+              <span class="meta-label">Port</span>
+              <span class="meta-value">${s.port}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">PID</span>
+              <span class="meta-value">${s.pid || '—'}</span>
+            </div>
+            <div class="meta-item" style="grid-column:1/-1">
+              <span class="meta-label">Startup Args</span>
+              <span class="meta-value" style="word-break:break-all;line-height:1.8">${esc((s.startup_args || []).join(' '))}</span>
+            </div>
+          </div>
+          <div class="card-actions">
+            ${!isRunning && !isStarting ? `
+              <button class="btn btn-sm btn-green" onclick="doStart('${esc(name)}')">▶ Start</button>
+            ` : ''}
+            ${isRunning ? `
+              <button class="btn btn-sm btn-red" onclick="doStop('${esc(name)}')">■ Stop</button>
+            ` : ''}
+            ${isStarting ? `
+              <button class="btn btn-sm" disabled><span class="spinner"></span> Starting</button>
+            ` : ''}
+            ${isStopping ? `
+              <button class="btn btn-sm" disabled><span class="spinner"></span> Stopping</button>
+            ` : ''}
+            ${!isActive && !isStarting && !isStopping ? `
+              <button class="btn btn-sm btn-blue" onclick="doSwitch('${esc(name)}')">⇄ Switch To</button>
+            ` : ''}
+            <button class="btn btn-sm" onclick="viewLog('${esc(name)}')" title="View logs">📋 Logs</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // ============================================================
+  // Actions
+  // ============================================================
+  async function doStart(name) {
+    toast(`Starting '${name}'...`, 'info');
+    try {
+      const r = await apiPost(`/start/${name}`);
+      if (r.success) toast(r.message, 'success');
+      else toast(r.message, 'error');
+    } catch (e) { toast('Start failed: ' + e.message, 'error'); }
+    setTimeout(fetchStatus, 1000);
+  }
+
+  async function doStop(name) {
+    toast(`Stopping '${name}'...`, 'info');
+    try {
+      const r = await apiPost(`/stop/${name}`);
+      if (r.success) toast(r.message, 'success');
+      else toast(r.message, 'error');
+    } catch (e) { toast('Stop failed: ' + e.message, 'error'); }
+    setTimeout(fetchStatus, 1000);
+  }
+
+  async function doSwitch(name) {
+    toast(`Switching to '${name}'...`, 'info');
+    try {
+      const r = await apiPost(`/switch/${name}`);
+      if (r.success) toast(r.message, 'success');
+      else toast(r.message, 'error');
+    } catch (e) { toast('Switch failed: ' + e.message, 'error'); }
+    setTimeout(fetchStatus, 1500);
+    setTimeout(fetchStatus, 4000);
+  }
+
+  async function reloadConfig() {
+    try {
+      const r = await apiPost('/reload');
+      toast(r.message, r.success ? 'success' : 'error');
+      fetchStatus();
+    } catch (e) { toast('Reload failed: ' + e.message, 'error'); }
+  }
+
+  // ============================================================
+  // Logs
+  // ============================================================
+  function updateLogTabs() {
+    const tabs = document.getElementById('logTabs');
+    const names = Object.keys(state.services);
+    tabs.innerHTML = names.map(n =>
+      `<button class="log-tab${currentLogService === n ? ' active' : ''}" onclick="viewLog('${esc(n)}')">${esc(n)}</button>`
+    ).join('');
+  }
+
+  function viewLog(name) {
+    currentLogService = name;
+    updateLogTabs();
+    fetchLogs();
+  }
+
+  async function fetchLogs() {
+    if (!currentLogService) return;
+    const body = document.getElementById('logBody');
+    try {
+      const data = await api(`/logs/${currentLogService}?tail=200`);
+      if (data.logs) {
+        body.innerHTML = data.logs.split('\n').map(line => {
+          let cls = 'log-line';
+          const lower = line.toLowerCase();
+          if (lower.includes('error') || lower.includes('exception') || lower.includes('traceback')) cls += ' log-line-error';
+          else if (lower.includes('warn')) cls += ' log-line-warn';
+          else if (lower.includes('info') || lower.includes('started') || lower.includes('listening')) cls += ' log-line-info';
+          return `<div class="${cls}">${esc(line)}</div>`;
+        }).join('');
+        if (autoScroll) body.scrollTop = body.scrollHeight;
+      }
+    } catch {
+      body.innerHTML = '<div class="log-empty">Failed to fetch logs</div>';
+    }
+  }
+
+  function clearLogView() {
+    document.getElementById('logBody').innerHTML = '<div class="log-empty">Log cleared</div>';
+  }
+
+  function toggleAutoScroll() {
+    autoScroll = !autoScroll;
+    const btn = document.getElementById('btnAutoScroll');
+    btn.style.color = autoScroll ? 'var(--accent)' : 'var(--text-muted)';
+    btn.textContent = autoScroll ? '↓ Auto-scroll' : '↓ Manual';
+  }
+
+  // ============================================================
+  // Settings
+  // ============================================================
+  function openSettings() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+      <div class="modal">
+        <h3>⚙ Settings</h3>
+        <div class="form-group">
+          <label>API Base URL</label>
+          <input type="text" id="settingsUrl" value="${esc(baseUrl || window.location.origin)}" placeholder="http://localhost:9999">
+        </div>
+        <div class="form-group">
+          <label>Auto-refresh interval (seconds)</label>
+          <input type="number" id="settingsInterval" value="3" min="1" max="60">
+        </div>
+        <div class="modal-actions">
+          <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+          <button class="btn btn-accent" onclick="applySettings()">Apply</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  function applySettings() {
+    const url = document.getElementById('settingsUrl').value.trim();
+    const interval = parseInt(document.getElementById('settingsInterval').value) || 3;
+    baseUrl = url === window.location.origin ? '' : url;
+    document.getElementById('autoRefreshHint').textContent = `Auto-refresh: ${interval}s`;
+    stopTimers();
+    startTimers(interval);
+    document.querySelector('.modal-overlay').remove();
+    toast('Settings applied', 'success');
+    fetchStatus();
+  }
+
+  // ============================================================
+  // Timers
+  // ============================================================
+  function startTimers(interval = 3) {
+    refreshTimer = setInterval(fetchStatus, interval * 1000);
+    logTimer = setInterval(fetchLogs, interval * 1000);
+  }
+
+  function stopTimers() {
+    clearInterval(refreshTimer);
+    clearInterval(logTimer);
+  }
+
+  function refreshAll() {
+    fetchStatus();
+    fetchLogs();
+  }
+
+  // ============================================================
+  // Init
+  // ============================================================
+  fetchStatus();
+  startTimers(3);
+</script>
+</body>
+</html>

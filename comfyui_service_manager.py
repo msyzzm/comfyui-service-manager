@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -25,12 +26,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 try:
-    from flask import Flask, jsonify, request
+    from flask import Flask, jsonify, request, send_from_directory
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
     print("Warning: Flask not installed. HTTP API will not be available.")
     print("Install with: pip install flask")
+
+try:
+    from flask_cors import CORS
+    CORS_AVAILABLE = True
+except ImportError:
+    CORS_AVAILABLE = False
 
 
 class ServiceStatus(Enum):
@@ -47,9 +54,9 @@ class ComfyUIService:
     """ComfyUI service configuration"""
     name: str
     port: int
-    python_executable: str = None  # Path to Python interpreter
+    python_executable: str = None
     listen_host: str = "0.0.0.0"
-    vram_mode: str = "--normalvram"  # --normalvram, --highvram, --lowvram
+    vram_mode: str = "--normalvram"
     extra_args: List[str] = field(default_factory=list)
     work_dir: str = None
     env_vars: Dict[str, str] = field(default_factory=dict)
@@ -59,10 +66,8 @@ class ComfyUIService:
 
     def __post_init__(self):
         if self.python_executable is None:
-            # Default to current Python
             self.python_executable = sys.executable
         if self.work_dir is None:
-            # Default to ComfyUI directory
             self.work_dir = os.path.expanduser("~/ComfyUI")
 
 
@@ -74,17 +79,17 @@ class ServiceManager:
         self.config_file = config_file or self._get_default_config_path()
         self.active_service: Optional[str] = None
         self.http_port = 9999
-        self.pid_dir = "pids"  # Directory to store PID files
-        self.logs_dir = "logs"  # Directory to store service logs
-        self.load_config()
+        self.pid_dir = "pids"
+        self.logs_dir = "logs"
+        self._lock = threading.Lock()
 
-        # Create directories
         Path(self.pid_dir).mkdir(exist_ok=True)
         Path(self.logs_dir).mkdir(exist_ok=True)
 
+        self.load_config()
+        self._restore_service_state()
+
     def _get_default_config_path(self) -> str:
-        """Get default config file path"""
-        # Try config/services.json first, then services.json in current directory
         config_path = Path("config/services.json")
         if config_path.exists():
             return str(config_path)
@@ -93,33 +98,35 @@ class ServiceManager:
     def load_config(self):
         """Load service configuration from JSON file"""
         config_path = Path(self.config_file)
-        if config_path.exists():
-            with open(config_path, "r") as f:
-                config = json.load(f)
-                self.http_port = config.get("http_port", 9999)
-                for svc_config in config.get("services", []):
-                    service = ComfyUIService(**svc_config)
-                    self.services[service.name] = service
-        else:
-            # Create default configuration
+        if not config_path.exists():
             self.create_default_config()
+            return
 
-        # Restore service state from PID files
-        self._restore_service_state()
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Error loading config: {e}")
+            return
+
+        self.http_port = config.get("http_port", 9999)
+        for svc_config in config.get("services", []):
+            try:
+                # Filter out runtime-only fields that shouldn't be in config
+                svc_config.pop("process", None)
+                svc_config.pop("status", None)
+                svc_config.pop("pid", None)
+                service = ComfyUIService(**svc_config)
+                self.services[service.name] = service
+            except (TypeError, KeyError) as e:
+                print(f"Warning: Skipping invalid service config: {e}")
 
     def auto_start_first_service(self) -> bool:
-        """
-        Automatically start the first service if no service is running.
-
-        Returns:
-            True if a service was started, False otherwise
-        """
-        # Check if there's already an active service
+        """Automatically start the first service if no service is running."""
         if self.active_service:
             print(f"[Auto-start] Service '{self.active_service}' is already running")
             return False
 
-        # Get the first service from configuration
         if not self.services:
             print("[Auto-start] No services configured")
             return False
@@ -159,7 +166,7 @@ class ServiceManager:
             "services": []
         }
         for service in self.services.values():
-            service_dict = {
+            config["services"].append({
                 "name": service.name,
                 "port": service.port,
                 "python_executable": service.python_executable,
@@ -168,53 +175,48 @@ class ServiceManager:
                 "extra_args": service.extra_args,
                 "work_dir": service.work_dir,
                 "env_vars": service.env_vars
-            }
-            config["services"].append(service_dict)
+            })
 
-        with open(self.config_file, "w") as f:
-            json.dump(config, f, indent=2)
+        config_path = Path(self.config_file)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.config_file, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
 
     def reload_config(self) -> bool:
-        """
-        Reload configuration from file.
-
-        This preserves the active service and running processes,
-        but updates service definitions from the config file.
-
-        Returns:
-            True if reload was successful
-        """
+        """Reload configuration from file, preserving running service states."""
         try:
             config_path = Path(self.config_file)
             if not config_path.exists():
                 print(f"Config file not found: {self.config_file}")
                 return False
 
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-            # Store current active service
-            current_active = self.active_service
+            with self._lock:
+                current_active = self.active_service
+                old_services = self.services.copy()
 
-            # Store current service states (PIDs, statuses)
-            old_services = self.services.copy()
+                self.services = {}
+                self.http_port = config.get("http_port", 9999)
 
-            # Update services from config
-            self.services = {}
-            self.http_port = config.get("http_port", 9999)
+                for svc_config in config.get("services", []):
+                    svc_config.pop("process", None)
+                    svc_config.pop("status", None)
+                    svc_config.pop("pid", None)
+                    try:
+                        service = ComfyUIService(**svc_config)
+                    except (TypeError, KeyError) as e:
+                        print(f"Warning: Skipping invalid service config: {e}")
+                        continue
+                    if service.name in old_services:
+                        old = old_services[service.name]
+                        service.pid = old.pid
+                        service.status = old.status
+                        service.process = old.process
+                    self.services[service.name] = service
 
-            for svc_config in config.get("services", []):
-                service = ComfyUIService(**svc_config)
-                # Restore state if service existed before
-                if service.name in old_services:
-                    old_service = old_services[service.name]
-                    service.pid = old_service.pid
-                    service.status = old_service.status
-                    service.process = old_service.process
-                self.services[service.name] = service
-
-            # Restore active service
-            self.active_service = current_active
+                self.active_service = current_active
 
             print(f"Configuration reloaded from {self.config_file}")
             print(f"Services: {list(self.services.keys())}")
@@ -225,21 +227,17 @@ class ServiceManager:
             return False
 
     def get_service(self, name: str) -> Optional[ComfyUIService]:
-        """Get service by name"""
         return self.services.get(name)
 
     def _get_pid_file_path(self, service_name: str) -> str:
-        """Get PID file path for a service"""
         return os.path.join(self.pid_dir, f"{service_name}.pid")
 
     def _save_pid(self, service_name: str, pid: int):
-        """Save PID to file"""
         pid_file = self._get_pid_file_path(service_name)
         with open(pid_file, "w") as f:
             f.write(str(pid))
 
     def _load_pid(self, service_name: str) -> Optional[int]:
-        """Load PID from file"""
         pid_file = self._get_pid_file_path(service_name)
         if os.path.exists(pid_file):
             try:
@@ -250,7 +248,6 @@ class ServiceManager:
         return None
 
     def _delete_pid_file(self, service_name: str):
-        """Delete PID file for a service"""
         pid_file = self._get_pid_file_path(service_name)
         if os.path.exists(pid_file):
             os.remove(pid_file)
@@ -261,70 +258,71 @@ class ServiceManager:
             if sys.platform == "win32":
                 import ctypes
                 kernel32 = ctypes.windll.kernel32
-                handle = kernel32.OpenProcess(1, 0, pid)
+                SYNCHRONIZE = 0x100000
+                handle = kernel32.OpenProcess(SYNCHRONIZE, 0, pid)
                 if handle:
                     kernel32.CloseHandle(handle)
                     return True
                 return False
             else:
-                os.kill(pid, 0)  # Send signal 0 to check if process exists
+                os.kill(pid, 0)
                 return True
         except (OSError, ProcessLookupError):
             return False
 
     def _restore_service_state(self):
-        """Restore service states from PID files and running processes"""
+        """Restore service states from PID files."""
+        restored_active = None
         for name, service in self.services.items():
-            # Try to load PID from file
             pid = self._load_pid(name)
+            if pid and self._is_process_running(pid):
+                service.pid = pid
+                service.status = ServiceStatus.RUNNING
+                if restored_active is None:
+                    restored_active = name
+                print(f"Restored service '{name}' (PID: {pid})")
+            elif pid:
+                self._delete_pid_file(name)
 
-            if pid:
-                # Check if process is still running
-                if self._is_process_running(pid):
-                    service.pid = pid
-                    service.status = ServiceStatus.RUNNING
-                    if self.active_service is None:
-                        self.active_service = name
-                    print(f"Restored service '{name}' (PID: {pid})")
-                else:
-                    # PID file exists but process not running, clean up
-                    self._delete_pid_file(name)
+        # Only restore active if we didn't already have one
+        if self.active_service is None:
+            self.active_service = restored_active
 
     def start_service(self, name: str) -> bool:
         """Start a ComfyUI service"""
-        service = self.get_service(name)
-        if not service:
-            print(f"Error: Service '{name}' not found")
-            return False
+        with self._lock:
+            service = self.get_service(name)
+            if not service:
+                print(f"Error: Service '{name}' not found")
+                return False
 
-        if service.status == ServiceStatus.RUNNING:
-            print(f"Service '{name}' is already running")
-            return True
+            if service.status == ServiceStatus.RUNNING:
+                print(f"Service '{name}' is already running")
+                return True
+
+            if service.status == ServiceStatus.STARTING:
+                print(f"Service '{name}' is already starting")
+                return False
 
         print(f"Starting service '{name}' on port {service.port}...")
 
-        # Build command
         cmd = [
-            service.python_executable,  # Use configured Python executable
+            service.python_executable,
             "main.py",
             service.vram_mode,
             "--port", str(service.port)
         ]
         cmd.extend(service.extra_args)
 
-        # Prepare environment
         env = os.environ.copy()
         env.update(service.env_vars)
 
-        # Prepare log file
         log_file = os.path.join(self.logs_dir, f"{name}.log")
         print(f"Service '{name}' log: {log_file}")
 
         try:
-            # Open log file for writing
             log_handle = open(log_file, "a")
 
-            # Start process with output redirected to log file
             process = subprocess.Popen(
                 cmd,
                 cwd=service.work_dir,
@@ -334,97 +332,115 @@ class ServiceManager:
                 preexec_fn=os.setsid if hasattr(os, 'setsid') else None
             )
 
-            service.process = process
-            service.pid = process.pid
-            service.status = ServiceStatus.STARTING
-
-            # Wait a bit to check if it started successfully
-            time.sleep(3)
-            if process.poll() is None:
-                service.status = ServiceStatus.RUNNING
+            with self._lock:
+                service.process = process
                 service.pid = process.pid
-                print(f"Service '{name}' started successfully (PID: {process.pid})")
-                self.active_service = name
-                # Save PID to file
-                self._save_pid(name, process.pid)
-                return True
-            else:
-                service.status = ServiceStatus.ERROR
-                print(f"Service '{name}' failed to start")
-                return False
+                service.status = ServiceStatus.STARTING
+
+            # Wait in background to check if process survives
+            def _wait_for_startup():
+                time.sleep(3)
+                with self._lock:
+                    if process.poll() is None:
+                        service.status = ServiceStatus.RUNNING
+                        self.active_service = name
+                        self._save_pid(name, process.pid)
+                        print(f"Service '{name}' started successfully (PID: {process.pid})")
+                    else:
+                        service.status = ServiceStatus.ERROR
+                        print(f"Service '{name}' failed to start (exit code: {process.returncode})")
+
+            t = threading.Thread(target=_wait_for_startup, daemon=True)
+            t.start()
+            return True
 
         except Exception as e:
-            service.status = ServiceStatus.ERROR
+            with self._lock:
+                service.status = ServiceStatus.ERROR
             print(f"Error starting service '{name}': {e}")
             return False
 
     def stop_service(self, name: str) -> bool:
         """Stop a ComfyUI service"""
-        service = self.get_service(name)
-        if not service:
-            print(f"Error: Service '{name}' not found")
-            return False
+        with self._lock:
+            service = self.get_service(name)
+            if not service:
+                print(f"Error: Service '{name}' not found")
+                return False
 
-        if service.status != ServiceStatus.RUNNING:
-            print(f"Service '{name}' is not running")
-            return True
+            if service.status not in (ServiceStatus.RUNNING, ServiceStatus.STARTING, ServiceStatus.ERROR):
+                print(f"Service '{name}' is not running")
+                return True
+
+            service.status = ServiceStatus.STOPPING
 
         print(f"Stopping service '{name}'...")
 
         try:
             target_pid = service.pid
 
-            # If we don't have a process object but have a PID, try to use it
             if not service.process and target_pid:
-                # Verify PID is still running
                 if self._is_process_running(target_pid):
-                    # Kill the process by PID
                     if sys.platform == "win32":
-                        subprocess.run(["taskkill", "/F", "/PID", str(target_pid)],
-                                      capture_output=True)
+                        # Try graceful first, then force
+                        subprocess.run(
+                            ["taskkill", "/PID", str(target_pid)],
+                            capture_output=True, timeout=5
+                        )
+                        time.sleep(2)
+                        if self._is_process_running(target_pid):
+                            subprocess.run(
+                                ["taskkill", "/F", "/PID", str(target_pid)],
+                                capture_output=True, timeout=5
+                            )
                     else:
                         os.kill(target_pid, signal.SIGTERM)
-                        # Wait a bit for graceful shutdown
                         time.sleep(2)
-                        # Force kill if still running
                         if self._is_process_running(target_pid):
                             os.kill(target_pid, signal.SIGKILL)
                 else:
-                    # PID not running, clean up
                     self._delete_pid_file(name)
-                    service.status = ServiceStatus.STOPPED
-                    service.pid = None
+                    with self._lock:
+                        service.status = ServiceStatus.STOPPED
+                        service.pid = None
                     return True
 
             elif service.process:
-                # Try graceful shutdown first
-                process_group = os.getpgid(service.process.pid) if hasattr(os, 'getpgid') else None
-                if process_group:
-                    os.killpg(process_group, signal.SIGTERM)
+                if hasattr(os, 'getpgid'):
+                    try:
+                        process_group = os.getpgid(service.process.pid)
+                        os.killpg(process_group, signal.SIGTERM)
+                    except (OSError, ProcessLookupError):
+                        service.process.terminate()
                 else:
                     service.process.terminate()
 
-                # Wait for graceful shutdown
                 try:
                     service.process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    # Force kill if it doesn't stop
-                    if process_group:
-                        os.killpg(process_group, signal.SIGKILL)
+                    if hasattr(os, 'getpgid'):
+                        try:
+                            os.killpg(process_group, signal.SIGKILL)
+                        except (OSError, ProcessLookupError):
+                            service.process.kill()
                     else:
                         service.process.kill()
                     service.process.wait()
 
-            service.status = ServiceStatus.STOPPED
-            service.process = None
-            service.pid = None
-            # Delete PID file
+            with self._lock:
+                service.status = ServiceStatus.STOPPED
+                service.process = None
+                service.pid = None
+                if self.active_service == name:
+                    self.active_service = None
             self._delete_pid_file(name)
             print(f"Service '{name}' stopped successfully")
             return True
 
         except Exception as e:
             print(f"Error stopping service '{name}': {e}")
+            with self._lock:
+                service.status = ServiceStatus.ERROR
             return False
 
     def switch_service(self, target_name: str) -> bool:
@@ -433,58 +449,51 @@ class ServiceManager:
             print(f"Error: Service '{target_name}' not found")
             return False
 
-        # Stop current active service
         if self.active_service and self.active_service != target_name:
             print(f"Stopping current service '{self.active_service}'...")
             if not self.stop_service(self.active_service):
                 return False
-            # Wait for service to fully stop
             time.sleep(2)
 
-        # Start target service
         return self.start_service(target_name)
 
     def get_status(self) -> Dict:
         """Get status of all services"""
-        services_status = {}
-        for name, service in self.services.items():
-            # Update process status
-            if service.process and service.process.poll() is not None:
-                service.status = ServiceStatus.STOPPED
-                service.process = None
-                service.pid = None
+        with self._lock:
+            services_status = {}
+            for name, service in self.services.items():
+                if service.process and service.process.poll() is not None:
+                    service.status = ServiceStatus.STOPPED
+                    service.process = None
+                    service.pid = None
 
-            services_status[name] = {
-                "status": service.status.value,
-                "port": service.port,
-                "pid": service.pid,
-                "is_active": name == self.active_service
+                # Build full startup command string
+                startup_args = [service.vram_mode, "--port", str(service.port)] + service.extra_args
+
+                services_status[name] = {
+                    "status": service.status.value,
+                    "port": service.port,
+                    "pid": service.pid,
+                    "vram_mode": service.vram_mode,
+                    "extra_args": service.extra_args,
+                    "startup_args": startup_args,
+                    "is_active": name == self.active_service
+                }
+
+            return {
+                "active_service": self.active_service,
+                "services": services_status,
+                "timestamp": datetime.now().isoformat()
             }
 
-        return {
-            "active_service": self.active_service,
-            "services": services_status,
-            "timestamp": datetime.now().isoformat()
-        }
-
     def get_service_logs(self, service_name: str, tail: int = 100) -> Optional[str]:
-        """
-        Get logs for a specific service.
-
-        Args:
-            service_name: Name of the service
-            tail: Number of lines to get from the end of the log file
-
-        Returns:
-            Log content as string, or None if log file not found
-        """
+        """Get logs for a specific service."""
         log_file = os.path.join(self.logs_dir, f"{service_name}.log")
         if not os.path.exists(log_file):
             return None
 
         try:
-            with open(log_file, "r") as f:
-                # Read last N lines
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 if tail:
                     lines = lines[-tail:]
@@ -502,16 +511,38 @@ def create_http_api(manager: ServiceManager):
     if not FLASK_AVAILABLE:
         return None
 
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    if CORS_AVAILABLE:
+        CORS(app)
+
+    @app.route('/')
+    def index():
+        """Serve the frontend UI"""
+        static_dir = Path(__file__).parent / "static"
+        index_file = static_dir / "index.html"
+        if index_file.exists():
+            return send_from_directory(str(static_dir), "index.html")
+        return jsonify({
+            "message": "ComfyUI Service Manager API",
+            "hint": "Place index.html in the 'static' folder to enable the web UI",
+            "endpoints": {
+                "GET /status": "Get all services status",
+                "GET /services": "List configured services",
+                "POST /switch/<name>": "Switch to a service",
+                "POST /start/<name>": "Start a service",
+                "POST /stop/<name>": "Stop a service",
+                "GET /logs/<name>": "Get service logs",
+                "POST /reload": "Reload configuration",
+            }
+        })
 
     @app.route('/status', methods=['GET'])
     def get_status():
-        """Get status of all services"""
         return jsonify(manager.get_status())
 
     @app.route('/services', methods=['GET'])
     def list_services():
-        """List all available services"""
         return jsonify({
             "services": list(manager.services.keys()),
             "active": manager.active_service
@@ -519,7 +550,6 @@ def create_http_api(manager: ServiceManager):
 
     @app.route('/reload', methods=['POST'])
     def reload_config():
-        """Reload configuration from file"""
         result = manager.reload_config()
         return jsonify({
             "success": result,
@@ -527,9 +557,8 @@ def create_http_api(manager: ServiceManager):
             "message": "Configuration reloaded" if result else "Failed to reload configuration"
         })
 
-    @app.route('/switch/<service_name>', methods=['POST', 'GET'])
+    @app.route('/switch/<service_name>', methods=['POST'])
     def switch_service(service_name):
-        """Switch to a specific service"""
         result = manager.switch_service(service_name)
         return jsonify({
             "success": result,
@@ -539,7 +568,6 @@ def create_http_api(manager: ServiceManager):
 
     @app.route('/start/<service_name>', methods=['POST'])
     def start_service(service_name):
-        """Start a specific service"""
         result = manager.start_service(service_name)
         return jsonify({
             "success": result,
@@ -548,7 +576,6 @@ def create_http_api(manager: ServiceManager):
 
     @app.route('/stop/<service_name>', methods=['POST'])
     def stop_service(service_name):
-        """Stop a specific service"""
         result = manager.stop_service(service_name)
         return jsonify({
             "success": result,
@@ -557,12 +584,11 @@ def create_http_api(manager: ServiceManager):
 
     @app.route('/logs/<service_name>', methods=['GET'])
     def get_logs(service_name):
-        """Get logs for a specific service"""
         tail = request.args.get('tail', default=100, type=int)
         log_content = manager.get_service_logs(service_name, tail=tail)
         if log_content is None:
             return jsonify({
-                "error": f"Service '{service_name}' not found or log file not found"
+                "error": f"Log file not found for service '{service_name}'"
             }), 404
         return jsonify({
             "service": service_name,
@@ -577,7 +603,6 @@ def create_http_api(manager: ServiceManager):
 # =============================================================================
 
 def main():
-    """Main CLI interface"""
     parser = argparse.ArgumentParser(
         description="ComfyUI Service Manager - Manage multiple ComfyUI instances"
     )
@@ -594,7 +619,7 @@ def main():
     parser.add_argument(
         '--config',
         default=None,
-        help="Path to configuration file (default: config/services.json or services.json)"
+        help="Path to configuration file"
     )
     parser.add_argument(
         '--port',
@@ -616,12 +641,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Create manager
     manager = ServiceManager(config_file=args.config)
     manager.http_port = args.port
 
     if args.command == 'status':
-        # Show status
         status = manager.get_status()
         print(f"Active Service: {status['active_service']}")
         print("\nServices:")
@@ -656,13 +679,10 @@ def main():
             sys.exit(1)
 
         if args.follow:
-            # Follow mode (like tail -f)
-            import time
             print(f"Following logs for '{args.service}' (Ctrl+C to stop)...")
             print(f"Log file: {log_file}")
             print("-" * 50)
-            with open(log_file, "r") as f:
-                # Go to end of file
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(0, 2)
                 while True:
                     line = f.readline()
@@ -671,7 +691,6 @@ def main():
                     else:
                         time.sleep(0.1)
         else:
-            # Show tail lines
             logs = manager.get_service_logs(args.service, tail=args.tail)
             if logs:
                 print(f"Logs for '{args.service}' (last {args.tail} lines):")
@@ -682,23 +701,24 @@ def main():
                 print(f"Log file is empty: {log_file}")
 
     elif args.command == 'server':
-        # Start HTTP API server
         if not FLASK_AVAILABLE:
             print("Error: Flask is required for HTTP API server")
             print("Install with: pip install flask")
             sys.exit(1)
 
-        # Auto-start first service if none is running
         manager.auto_start_first_service()
 
         app = create_http_api(manager)
-        print(f"Starting ComfyUI Service Manager HTTP API on port {manager.http_port}...")
-        print(f"Available endpoints:")
-        print(f"  GET  http://localhost:{manager.http_port}/status")
-        print(f"  GET  http://localhost:{manager.http_port}/services")
-        print(f"  POST http://localhost:{manager.http_port}/switch/<service_name>")
-        print(f"  POST http://localhost:{manager.http_port}/start/<service_name>")
-        print(f"  POST http://localhost:{manager.http_port}/stop/<service_name>")
+        print(f"Starting ComfyUI Service Manager on port {manager.http_port}...")
+        print(f"Web UI: http://localhost:{manager.http_port}")
+        print(f"API endpoints:")
+        print(f"  GET  /status              - All services status")
+        print(f"  GET  /services            - List services")
+        print(f"  POST /switch/<name>       - Switch service")
+        print(f"  POST /start/<name>        - Start service")
+        print(f"  POST /stop/<name>         - Stop service")
+        print(f"  GET  /logs/<name>         - Service logs")
+        print(f"  POST /reload              - Reload config")
         app.run(host='0.0.0.0', port=manager.http_port, debug=False)
 
 

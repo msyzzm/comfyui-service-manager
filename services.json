@@ -1,0 +1,31 @@
+{
+  "http_port": 9999,
+  "services": [
+    {
+      "name": "normal",
+      "port": 8188,
+      "python_executable": "/home/aznable/miniconda3/envs/comfy/bin/python",
+      "listen_host": "0.0.0.0",
+      "vram_mode": "--normalvram",
+      "extra_args": ["--listen"],
+      "work_dir": "/home/aznable/ComfyUI",
+      "env_vars": {
+        "HSA_OVERRIDE_GFX_VERSION": "11.0.0",
+        "PYTORCH_HIP_ALLOC_CONF": "expandable_segments:True"
+      }
+    },
+    {
+      "name": "no-cache",
+      "port": 8188,
+      "python_executable": "/home/aznable/miniconda3/envs/comfy/bin/python",
+      "listen_host": "0.0.0.0",
+      "vram_mode": "--normalvram",
+      "extra_args": ["--listen","--cache-none"],
+      "work_dir": "/home/aznable/ComfyUI",
+      "env_vars": {
+        "HSA_OVERRIDE_GFX_VERSION": "11.0.0",
+        "PYTORCH_HIP_ALLOC_CONF": "expandable_segments:True"
+      }
+    }
+  ]
+}
