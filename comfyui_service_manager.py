@@ -74,6 +74,11 @@ class ComfyUIService:
 class ServiceManager:
     """Manages multiple ComfyUI services"""
 
+    # Max log file size before rotation (10 MB)
+    MAX_LOG_SIZE = 10 * 1024 * 1024
+    # Max number of rotated log files to keep
+    MAX_LOG_FILES = 3
+
     def __init__(self, config_file: str = None):
         self.services: Dict[str, ComfyUIService] = {}
         self.config_file = config_file or self._get_default_config_path()
@@ -88,6 +93,38 @@ class ServiceManager:
 
         self.load_config()
         self._restore_service_state()
+
+    def _rotate_log(self, service_name: str):
+        """Rotate log file if it exceeds MAX_LOG_SIZE.
+
+        Keeps at most MAX_LOG_FILES rotated copies:
+          name.log → name.log.1 → name.log.2 → ... (oldest deleted)
+        """
+        log_file = Path(self.logs_dir) / f"{service_name}.log"
+        if not log_file.exists():
+            return
+
+        try:
+            if log_file.stat().st_size < self.MAX_LOG_SIZE:
+                return
+        except OSError:
+            return
+
+        # Delete the oldest rotated file
+        oldest = Path(self.logs_dir) / f"{service_name}.log.{self.MAX_LOG_FILES}"
+        if oldest.exists():
+            oldest.unlink()
+
+        # Shift existing rotated files: .2 → .3, .1 → .2
+        for i in range(self.MAX_LOG_FILES, 1, -1):
+            src = Path(self.logs_dir) / f"{service_name}.log.{i - 1}"
+            dst = Path(self.logs_dir) / f"{service_name}.log.{i}"
+            if src.exists():
+                src.rename(dst)
+
+        # Current → .1
+        log_file.rename(Path(self.logs_dir) / f"{service_name}.log.1")
+        print(f"[Log] Rotated log for '{service_name}'")
 
     def _get_default_config_path(self) -> str:
         config_path = Path("config/services.json")
@@ -318,6 +355,7 @@ class ServiceManager:
         env.update(service.env_vars)
 
         log_file = os.path.join(self.logs_dir, f"{name}.log")
+        self._rotate_log(name)
         print(f"Service '{name}' log: {log_file}")
 
         try:
@@ -487,17 +525,24 @@ class ServiceManager:
             }
 
     def get_service_logs(self, service_name: str, tail: int = 100) -> Optional[str]:
-        """Get logs for a specific service."""
+        """Get logs for a specific service. Reads from the end of the file efficiently."""
         log_file = os.path.join(self.logs_dir, f"{service_name}.log")
         if not os.path.exists(log_file):
             return None
 
         try:
             with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                if not tail:
+                    return f.read()
+
+                # Efficient tail read: seek from end, avoid loading entire file
+                f.seek(0, 2)
+                file_size = f.tell()
+                # Read a generous chunk: assume ~200 bytes per line
+                read_size = min(tail * 200, file_size)
+                f.seek(max(0, file_size - read_size))
                 lines = f.readlines()
-                if tail:
-                    lines = lines[-tail:]
-                return "".join(lines)
+                return "".join(lines[-tail:])
         except Exception as e:
             return f"Error reading log: {e}"
 
