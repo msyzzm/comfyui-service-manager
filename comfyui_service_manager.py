@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import atexit
 import json
 import os
 import signal
@@ -524,6 +525,24 @@ class ServiceManager:
                 "timestamp": datetime.now().isoformat()
             }
 
+    def shutdown_all(self):
+        """Stop all running services. Safe to call multiple times."""
+        names_to_stop = []
+        with self._lock:
+            for name, service in self.services.items():
+                if service.status in (ServiceStatus.RUNNING, ServiceStatus.STARTING):
+                    names_to_stop.append(name)
+
+        if not names_to_stop:
+            return
+
+        print(f"\n[Shutdown] Stopping {len(names_to_stop)} service(s): {names_to_stop}")
+        for name in names_to_stop:
+            try:
+                self.stop_service(name)
+            except Exception as e:
+                print(f"[Shutdown] Error stopping '{name}': {e}")
+
     def get_service_logs(self, service_name: str, tail: int = 100) -> Optional[str]:
         """Get logs for a specific service. Reads from the end of the file efficiently."""
         log_file = os.path.join(self.logs_dir, f"{service_name}.log")
@@ -688,6 +707,20 @@ def main():
 
     manager = ServiceManager(config_file=args.config)
     manager.http_port = args.port
+
+    # Ensure child processes are killed on exit
+    atexit.register(manager.shutdown_all)
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _signal_handler(signum, _frame):
+        manager.shutdown_all()
+        # Restore original handler and re-raise so the default behavior applies
+        signal.signal(signum, original_sigint if signum == signal.SIGINT else original_sigterm)
+        signal.raise_signal(signum)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
 
     if args.command == 'status':
         status = manager.get_status()
